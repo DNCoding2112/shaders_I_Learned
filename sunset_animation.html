@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sunrise to Sunset Shader</title>
+
+<style>
+    html, body {
+        margin: 0;
+        overflow: hidden;
+        background: black;
+        width: 100%;
+        height: 100%;
+    }
+
+    canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+    }
+</style>
+</head>
+
+<body>
+
+<canvas id="glcanvas"></canvas>
+
+<script>
+
+const canvas = document.getElementById("glcanvas");
+const gl = canvas.getContext("webgl");
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// --------------------------------------------------
+// Vertex Shader
+// --------------------------------------------------
+
+const vertexShaderSource = `
+attribute vec2 a_position;
+
+void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+`;
+
+// --------------------------------------------------
+// Fragment Shader
+// --------------------------------------------------
+
+const fragmentShaderSource = `
+
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+uniform vec2 u_resolution;
+uniform float u_time;
+
+// --------------------------------------------------
+// Random helpers
+// --------------------------------------------------
+
+float hash(vec2 p) {
+    return fract(
+        sin(dot(p, vec2(127.1, 311.7))) *
+        43758.5453123
+    );
+}
+
+float noise(vec2 p) {
+
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    return mix(a, b, u.x)
+         + (c - a) * u.y * (1.0 - u.x)
+         + (d - b) * u.x * u.y;
+}
+
+void main() {
+
+    // --------------------------------------------------
+    // Normalized coordinates
+    // --------------------------------------------------
+
+    vec2 st = gl_FragCoord.xy / u_resolution.xy;
+
+    // --------------------------------------------------
+    // DAY CYCLE
+    // --------------------------------------------------
+    // Creates a repeating value:
+    // 0 -> 1 -> 0 -> 1 ...
+    // This controls sunrise/sunset transition
+    // --------------------------------------------------
+
+    float t = sin(u_time * 0.15) * 0.5 + 0.5;
+
+    // --------------------------------------------------
+    // Painterly coordinate distortion
+    // --------------------------------------------------
+
+    st.x += sin(st.y * 8.0 + u_time * 0.2) * 0.02;
+    st.y += sin(st.x * 5.0) * 0.01;
+
+    // --------------------------------------------------
+    // SUNRISE PALETTE
+    // --------------------------------------------------
+
+    vec3 sunriseTop     = vec3(0.45, 0.60, 0.90);
+    vec3 sunriseHorizon = vec3(1.00, 0.75, 0.60);
+    vec3 sunriseGlow    = vec3(1.00, 0.90, 0.75);
+
+    // --------------------------------------------------
+    // SUNSET PALETTE
+    // --------------------------------------------------
+
+    vec3 sunsetTop      = vec3(0.18, 0.20, 0.42);
+    vec3 sunsetHorizon  = vec3(1.00, 0.45, 0.18);
+    vec3 sunsetGlow     = vec3(1.00, 0.80, 0.50);
+
+    // --------------------------------------------------
+    // Blend palettes using time
+    // --------------------------------------------------
+
+    vec3 topColor =
+        mix(sunriseTop, sunsetTop, t);
+
+    vec3 horizonColor =
+        mix(sunriseHorizon, sunsetHorizon, t);
+
+    vec3 glowColor =
+        mix(sunriseGlow, sunsetGlow, t);
+
+    // --------------------------------------------------
+    // Base vertical sky gradient
+    // --------------------------------------------------
+
+    float skyGrad =
+        smoothstep(0.0, 1.0, st.y);
+
+    vec3 color =
+        mix(horizonColor, topColor, skyGrad);
+
+    // --------------------------------------------------
+    // Animated sun position
+    // --------------------------------------------------
+    // Sunrise = left
+    // Sunset  = right
+    // --------------------------------------------------
+
+    vec2 sunPos = vec2(
+        mix(0.25, 0.75, t),
+        mix(0.16, 0.24, t)
+    );
+
+    vec2 p = st - sunPos;
+
+    // Stretch glow horizontally
+    p.x *= 0.6;
+
+    float d = length(p);
+
+    // --------------------------------------------------
+    // Main atmospheric glow
+    // --------------------------------------------------
+
+    float glow =
+        1.0 - smoothstep(0.0, 0.55, d);
+
+    color += glow * glowColor * 0.9;
+
+    // Strong inner sun
+    float innerGlow =
+        1.0 - smoothstep(0.0, 0.15, d);
+
+    color += innerGlow * vec3(1.0, 0.95, 0.85);
+
+    // --------------------------------------------------
+    // Cloud streaks
+    // --------------------------------------------------
+
+    float clouds =
+        sin(st.x * 10.0 - st.y * 18.0);
+
+    // Animate cloud motion
+    clouds += noise(
+        st * 8.0 + vec2(u_time * 0.03, 0.0)
+    );
+
+    clouds =
+        smoothstep(0.4, 1.0, clouds);
+
+    // Stronger clouds at sunset
+    float cloudStrength =
+        mix(0.10, 0.28, t);
+
+    color +=
+        clouds *
+        glow *
+        horizonColor *
+        cloudStrength;
+
+    // --------------------------------------------------
+    // Soft atmospheric haze
+    // --------------------------------------------------
+
+    float haze =
+        noise(st * 3.0 + u_time * 0.02);
+
+    haze =
+        smoothstep(0.4, 0.8, haze);
+
+    color =
+        mix(color, glowColor, haze * 0.08);
+
+    // --------------------------------------------------
+    // Water reflection
+    // --------------------------------------------------
+
+    float reflectionMask =
+        1.0 - smoothstep(0.0, 0.45, st.y);
+
+    float reflection =
+        glow *
+        reflectionMask;
+
+    reflection *=
+        0.85 +
+        sin(st.y * 140.0) * 0.03;
+
+    color +=
+        reflection *
+        horizonColor *
+        0.35;
+
+    // --------------------------------------------------
+    // Painterly grain
+    // --------------------------------------------------
+
+    float grain =
+        noise(gl_FragCoord.xy * 0.8);
+
+    color +=
+        (grain - 0.5) * 0.03;
+
+    // --------------------------------------------------
+    // Soft vignette
+    // --------------------------------------------------
+
+    float vignette =
+        st.x * (1.0 - st.x) *
+        st.y * (1.0 - st.y);
+
+    vignette =
+        pow(vignette * 1.8, 0.28);
+
+    color *= vignette;
+
+    // --------------------------------------------------
+    // Gentle cinematic bloom feel
+    // --------------------------------------------------
+
+    color = pow(color, vec3(0.92));
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`;
+
+// --------------------------------------------------
+// Shader compilation
+// --------------------------------------------------
+
+function createShader(gl, type, source) {
+
+    const shader = gl.createShader(type);
+
+    gl.shaderSource(shader, source);
+
+    gl.compileShader(shader);
+
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+
+        console.error(gl.getShaderInfoLog(shader));
+
+        gl.deleteShader(shader);
+
+        return null;
+    }
+
+    return shader;
+}
+
+const vertexShader =
+    createShader(
+        gl,
+        gl.VERTEX_SHADER,
+        vertexShaderSource
+    );
+
+const fragmentShader =
+    createShader(
+        gl,
+        gl.FRAGMENT_SHADER,
+        fragmentShaderSource
+    );
+
+// --------------------------------------------------
+// Program setup
+// --------------------------------------------------
+
+const program = gl.createProgram();
+
+gl.attachShader(program, vertexShader);
+gl.attachShader(program, fragmentShader);
+
+gl.linkProgram(program);
+
+gl.useProgram(program);
+
+// --------------------------------------------------
+// Fullscreen quad
+// --------------------------------------------------
+
+const positionBuffer = gl.createBuffer();
+
+gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
+gl.bufferData(
+    gl.ARRAY_BUFFER,
+    new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+
+        -1,  1,
+         1, -1,
+         1,  1
+    ]),
+    gl.STATIC_DRAW
+);
+
+const positionLocation =
+    gl.getAttribLocation(program, "a_position");
+
+gl.enableVertexAttribArray(positionLocation);
+
+gl.vertexAttribPointer(
+    positionLocation,
+    2,
+    gl.FLOAT,
+    false,
+    0,
+    0
+);
+
+// --------------------------------------------------
+// Uniforms
+// --------------------------------------------------
+
+const resolutionLocation =
+    gl.getUniformLocation(program, "u_resolution");
+
+const timeLocation =
+    gl.getUniformLocation(program, "u_time");
+
+// --------------------------------------------------
+// Resize handling
+// --------------------------------------------------
+
+function resize() {
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    gl.viewport(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+}
+
+window.addEventListener("resize", resize);
+
+resize();
+
+// --------------------------------------------------
+// Render loop
+// --------------------------------------------------
+
+function render(time) {
+
+    gl.uniform2f(
+        resolutionLocation,
+        canvas.width,
+        canvas.height
+    );
+
+    gl.uniform1f(
+        timeLocation,
+        time * 0.001
+    );
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+
+</script>
+
+</body>
+</html>
